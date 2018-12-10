@@ -6,8 +6,7 @@ Machine Learning/AI scenarios.
 Check out the SCRCPY project here:
 https://github.com/Genymobile/scrcpy/
 
-NB: must be placed in the same directory as SCRCPY,
-with adb and ffmpeg in ya PATH. 
+NB: Don't forget to set your path to scrcpy/adb
 
 Running stand-alone spawns an OpenCV2 window to view data real-time.
 '''
@@ -15,6 +14,7 @@ Running stand-alone spawns an OpenCV2 window to view data real-time.
 import socket
 import struct
 import sys
+import os
 import subprocess
 import io
 import time
@@ -27,36 +27,9 @@ IP = '127.0.0.1'
 PORT = 8080
 RECVSIZE = 10000
 
-
-def stdout_thread(self):
-    print("START STDOUT THREAD")
-    while self.ACTIVE:
-        rd = self.ffm.stdout.read(self.bytes_to_read)
-        if rd:
-            self.bytes_rcvd += len(rd)
-            self.images_rcvd += 1
-            self.ffoutqueue.put(rd)
-    print("FINISH STDOUT THREAD")
-
-
-def stderr_thread(self):
-    print("START STDERR THREAD")
-    while self.ACTIVE:
-        rd = self.ffm.stderr.readline()
-        if rd:
-            self.OUT.append(rd.decode("utf-8"))
-    print("FINISH STDERR THREAD")
-
-
-def stdin_thread(self):
-    print("START STDIN THREAD")
-
-    while self.ACTIVE:
-        data = self.sock.recv(RECVSIZE)
-        self.bytes_sent += len(data)
-        self.ffm.stdin.write(data)
-
-    print("FINISH STDIN THREAD")
+SCRCPY_dir = 'C:\\Users\\Al\\Downloads\\scrcpy-win64-v1.5\\scrcpy-win64\\'
+FFMPEG_bin = 'ffmpeg'
+ADB_bin = os.path.join(SCRCPY_dir,"adb")
 
 
 class SCRCPY_client():
@@ -71,10 +44,49 @@ class SCRCPY_client():
         self.FFMPEGREADY = False
         self.ffoutqueue = Queue()
 
-    def get_next_frame(self, skip=0):
+
+    def stdout_thread(self):
+        print("START STDOUT THREAD")
+        while self.ACTIVE:
+            rd = self.ffm.stdout.read(self.bytes_to_read)
+            if rd:
+                self.bytes_rcvd += len(rd)
+                self.images_rcvd += 1
+                self.ffoutqueue.put(rd)
+        print("FINISH STDOUT THREAD")
+
+
+    def stderr_thread(self):
+        print("START STDERR THREAD")
+        while self.ACTIVE:
+            rd = self.ffm.stderr.readline()
+            if rd:
+                self.OUT.append(rd.decode("utf-8"))
+        print("FINISH STDERR THREAD")
+
+
+    def stdin_thread(self):
+        print("START STDIN THREAD")
+
+        while self.ACTIVE:
+            data = self.sock.recv(RECVSIZE)
+            self.bytes_sent += len(data)
+            self.ffm.stdin.write(data)
+
+        print("FINISH STDIN THREAD")
+            
+            
+    def get_next_frame(self, most_recent=False):
         if self.ffoutqueue.empty():
             return None
-        frm = self.ffoutqueue.get()
+        
+        if most_recent:
+            frames_skipped = -1
+            while not self.ffoutqueue.empty():
+                frm = self.ffoutqueue.get()
+                frames_skipped +=1
+        else:
+            frm = self.ffoutqueue.get()
 
         frm = np.frombuffer(frm, dtype=np.ubyte)
         frm = frm.reshape((self.HEIGHT, self.WIDTH, 3))
@@ -103,11 +115,9 @@ class SCRCPY_client():
 
         self.bytes_to_read = self.WIDTH * self.HEIGHT * 3
 
-    def start_processing(self):
-        # Start FFPlay in pipe mode
-        #ffmpegCmd =['ffmpeg', '-i', '-','-vf', 'scale=1920x1080', 'myout.mp4']
-
-        ffmpegCmd = ['ffmpeg', '-y',
+    def start_processing(self, connect_attempts=20):
+        # Set up FFmpeg 
+        ffmpegCmd = [FFMPEG_bin, '-y',
                      '-r', '20', '-i', 'pipe:0',
                      '-vcodec', 'rawvideo',
                      '-pix_fmt', 'rgb24',
@@ -119,12 +129,12 @@ class SCRCPY_client():
                                     stdout=subprocess.PIPE,
                                     stderr=subprocess.PIPE)
 
-        self.ffoutthrd = Thread(target=stdout_thread,
-                                args=(self,))
-        self.fferrthrd = Thread(target=stderr_thread,
-                                args=(self,))
-        self.ffinthrd = Thread(target=stdin_thread,
-                               args=(self,))
+        self.ffoutthrd = Thread(target=self.stdout_thread,
+                                args=())
+        self.fferrthrd = Thread(target=self.stderr_thread,
+                                args=())
+        self.ffinthrd = Thread(target=self.stdin_thread,
+                               args=())
         self.ffoutthrd.daemon = self.fferrthrd.daemon = self.ffinthrd.daemon = True
 
         self.fferrthrd.start()
@@ -134,49 +144,57 @@ class SCRCPY_client():
         self.ffoutthrd.start()
 
         print("Waiting on FFmpeg to detect source", end='', flush=True)
-        for i in range(20):
+        for i in range(connect_attempts):
             print('.', end='', flush=True)
             if any(["Output #0, image2pipe" in x for x in self.OUT]):
                 print("Ready!")
                 self.FFMPEGREADY = True
                 break
-            time.sleep(0.25)
+            time.sleep(0.5)
         else:
             print("FFmpeg error?")
-            print(self.OUT)
+            print(''.join(self.OUT))
+            raise Exception("FFmpeg could not open stream")
 
 
 if __name__ == "__main__":
+    
     print("Upload JAR")
-    subprocess.Popen("adb push scrcpy-server.jar /data/local/tmp/".split(" "))
-    time.sleep(1)
+    subprocess.Popen(
+        [ADB_bin,'push',
+        os.path.join(SCRCPY_dir,'scrcpy-server.jar'),
+        '/data/local/tmp/'],
+        cwd=SCRCPY_dir).wait()
+    
+    #ADB Shell is Blocking, don't wait for it 
     print("Run JAR")
     subprocess.Popen(
-        "adb shell CLASSPATH=/data/local/tmp/scrcpy-server.jar app_process / com.genymobile.scrcpy.Server 800 80000000 true".split(" "))
+        [ADB_bin,'shell',
+        'CLASSPATH=/data/local/tmp/scrcpy-server.jar',
+        'app_process','/','com.genymobile.scrcpy.Server',
+        '800','80000000','true'],
+        cwd=SCRCPY_dir)
     time.sleep(1)
+    
     print("Forward Port")
-    subprocess.Popen("adb forward tcp:8080 localabstract:scrcpy".split(" "))
-
+    subprocess.Popen(
+        [ADB_bin,'forward',
+        'tcp:8080','localabstract:scrcpy'],
+        cwd=SCRCPY_dir).wait()
+    time.sleep(1)
+    
     SCRCPY = SCRCPY_client()
     SCRCPY.connect()
     SCRCPY.start_processing()
 
-    frameskip = 0
     import cv2
     try:
         while True:
-            while True:
-                frm = SCRCPY.get_next_frame()
-                if isinstance(frm, (np.ndarray, np.generic)):
-                    showfrm = frm
-                    frameskip += 1
-                else:
-                    break
-
-            cv2.imshow("image", showfrm)
-            cv2.waitKey(1)  # CAP 60FPS
-            print("CV2 frameskip =", frameskip)
-            frameskip = 0
+            frm = SCRCPY.get_next_frame(most_recent=False)
+            if isinstance(frm, (np.ndarray, np.generic)):
+                frm = cv2.cvtColor(frm, cv2.COLOR_RGB2BGR)
+                cv2.imshow("image", frm)
+                cv2.waitKey(1000//60)  # CAP 60FPS
     except KeyboardInterrupt:
         from IPython import embed
         embed()
