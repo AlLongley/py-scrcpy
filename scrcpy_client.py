@@ -23,9 +23,16 @@ import numpy as np
 from threading import Thread
 from queue import Queue, Empty
 
+SVR_maxSize = 600
+SVR_bitRate = 999999999
+SVR_tunnelForward = "true"
+SVR_crop = "9999:9999:0:0"
+SVR_sendFrameMeta = "true"
+
 IP = '127.0.0.1'
 PORT = 8080
-RECVSIZE = 10000
+RECVSIZE = 0x10000
+HEADER_SIZE  = 12
 
 SCRCPY_dir = 'C:\\Users\\Al\\Downloads\\scrcpy-win64-v1.5\\scrcpy-win64\\'
 FFMPEG_bin = 'ffmpeg'
@@ -38,7 +45,7 @@ class SCRCPY_client():
         self.bytes_rcvd = 0
         self.images_rcvd = 0
         self.bytes_to_read = 0
-        self.OUT = []
+        self.FFmpeg_info = []
         self.ACTIVE = True
         self.LANDSCAPE = True
         self.FFMPEGREADY = False
@@ -61,7 +68,7 @@ class SCRCPY_client():
         while self.ACTIVE:
             rd = self.ffm.stderr.readline()
             if rd:
-                self.OUT.append(rd.decode("utf-8"))
+                self.FFmpeg_info.append(rd.decode("utf-8"))
         print("FINISH STDERR THREAD")
 
 
@@ -69,9 +76,22 @@ class SCRCPY_client():
         print("START STDIN THREAD")
 
         while self.ACTIVE:
-            data = self.sock.recv(RECVSIZE)
-            self.bytes_sent += len(data)
-            self.ffm.stdin.write(data)
+            if SVR_sendFrameMeta:
+                header = self.sock.recv(HEADER_SIZE)
+                pts  =int.from_bytes(header[:8],
+                    byteorder='big', signed=False)
+                frm_len = int.from_bytes(header[8:],
+                    byteorder='big', signed=False)
+                #print(pts)
+                #print(frm_len)
+               
+                data = self.sock.recv(frm_len)
+                self.bytes_sent += len(data)
+                self.ffm.stdin.write(data)
+            else:
+                data = self.sock.recv(RECVSIZE)
+                self.bytes_sent += len(data)
+                self.ffm.stdin.write(data)
 
         print("FINISH STDIN THREAD")
             
@@ -115,7 +135,7 @@ class SCRCPY_client():
 
         self.bytes_to_read = self.WIDTH * self.HEIGHT * 3
 
-    def start_processing(self, connect_attempts=20):
+    def start_processing(self, connect_attempts=200):
         # Set up FFmpeg 
         ffmpegCmd = [FFMPEG_bin, '-y',
                      '-r', '20', '-i', 'pipe:0',
@@ -123,19 +143,23 @@ class SCRCPY_client():
                      '-pix_fmt', 'rgb24',
                      '-f', 'image2pipe',
                      'pipe:1']
-
-        self.ffm = subprocess.Popen(ffmpegCmd,
-                                    stdin=subprocess.PIPE,
-                                    stdout=subprocess.PIPE,
-                                    stderr=subprocess.PIPE)
-
+        try:
+            self.ffm = subprocess.Popen(ffmpegCmd,
+                                        stdin=subprocess.PIPE,
+                                        stdout=subprocess.PIPE,
+                                        stderr=subprocess.PIPE)
+        except FileNotFoundError:
+            raise Exception("Couldn't find FFmpeg at path FFMPEG_bin: "+
+                            str(FFMPEG_bin))
         self.ffoutthrd = Thread(target=self.stdout_thread,
                                 args=())
         self.fferrthrd = Thread(target=self.stderr_thread,
                                 args=())
         self.ffinthrd = Thread(target=self.stdin_thread,
                                args=())
-        self.ffoutthrd.daemon = self.fferrthrd.daemon = self.ffinthrd.daemon = True
+        self.ffoutthrd.daemon = True
+        self.fferrthrd.daemon = True
+        self.ffinthrd.daemon = True
 
         self.fferrthrd.start()
         time.sleep(0.25)
@@ -146,43 +170,55 @@ class SCRCPY_client():
         print("Waiting on FFmpeg to detect source", end='', flush=True)
         for i in range(connect_attempts):
             print('.', end='', flush=True)
-            if any(["Output #0, image2pipe" in x for x in self.OUT]):
+            if any(["Output #0, image2pipe" in x for x in self.FFmpeg_info]):
                 print("Ready!")
                 self.FFMPEGREADY = True
                 break
             time.sleep(0.5)
         else:
             print("FFmpeg error?")
-            print(''.join(self.OUT))
+            print(''.join(self.FFmpeg_info))
             raise Exception("FFmpeg could not open stream")
 
 
 if __name__ == "__main__":
-    
-    print("Upload JAR")
-    subprocess.Popen(
-        [ADB_bin,'push',
-        os.path.join(SCRCPY_dir,'scrcpy-server.jar'),
-        '/data/local/tmp/'],
-        cwd=SCRCPY_dir).wait()
-    
-    #ADB Shell is Blocking, don't wait for it 
-    print("Run JAR")
-    subprocess.Popen(
-        [ADB_bin,'shell',
-        'CLASSPATH=/data/local/tmp/scrcpy-server.jar',
-        'app_process','/','com.genymobile.scrcpy.Server',
-        '800','80000000','true'],
-        cwd=SCRCPY_dir)
-    time.sleep(1)
-    
-    print("Forward Port")
-    subprocess.Popen(
-        [ADB_bin,'forward',
-        'tcp:8080','localabstract:scrcpy'],
-        cwd=SCRCPY_dir).wait()
-    time.sleep(1)
-    
+    try:
+        print("Upload JAR")
+        subprocess.Popen(
+            [ADB_bin,'push',
+            os.path.join(SCRCPY_dir,'scrcpy-server.jar'),
+            '/data/local/tmp/'],
+            cwd=SCRCPY_dir).wait()
+        
+        '''
+        ADB Shell is Blocking, don't wait up for it 
+        Args for the server are as follows:
+        maxSize         (integer, multiple of 8) 0
+        bitRate         (integer)
+        tunnelForward   (optional, bool) use "adb forward" instead of "adb tunnel"
+        crop            (optional, string) "width:height:x:y"
+        sendFrameMeta   (optional, bool) 
+        
+        '''
+        print("Run JAR")
+        subprocess.Popen(
+            [ADB_bin,'shell',
+            'CLASSPATH=/data/local/tmp/scrcpy-server.jar',
+            'app_process','/','com.genymobile.scrcpy.Server',
+            str(SVR_maxSize),str(SVR_bitRate),
+            SVR_tunnelForward, SVR_crop, SVR_sendFrameMeta],
+            cwd=SCRCPY_dir)
+        time.sleep(1)
+        
+        print("Forward Port")
+        subprocess.Popen(
+            [ADB_bin,'forward',
+            'tcp:8080','localabstract:scrcpy'],
+            cwd=SCRCPY_dir).wait()
+        time.sleep(1)
+    except FileNotFoundError:
+        raise Exception("Couldn't find ADB at path ADB_bin: "+str(ADB_bin))
+        
     SCRCPY = SCRCPY_client()
     SCRCPY.connect()
     SCRCPY.start_processing()
