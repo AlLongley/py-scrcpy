@@ -190,14 +190,18 @@ class SCRCPY_client():
             logger.error(''.join(self.FFmpeg_info))
             raise Exception("FFmpeg could not open stream")
         return True
-        
+    
+    def kill_ffmpeg(self):
+        self.ffm.terminate()
+        self.ffm.kill()  
+        #self.ffm.communicate()
     def __del__(self):
-        self.ACTIVE = False
-        self.ffm.kill()
         
-        #self.fferrthrd.join()
-        #self.ffinthrd.join()
-        #self.ffoutthrd.join()
+        self.ACTIVE = False
+        
+        self.fferrthrd.join()
+        self.ffinthrd.join()
+        self.ffoutthrd.join()
         
 def connect_and_forward_scrcpy():
     try:
