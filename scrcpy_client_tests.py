@@ -58,7 +58,7 @@ class TestClientMockConnect(unittest.TestCase):
         self.assertTrue(self.SCRCPY.start_processing())
         
         #Give FFmpeg a moment to catch up
-        time.sleep(0.1)
+        time.sleep(2.0)
     def test_resolution_recieved(self):
         self.assertTrue(self.SCRCPY.WIDTH>1)
         self.assertTrue(self.SCRCPY.HEIGHT>1)
