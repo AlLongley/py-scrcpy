@@ -87,11 +87,9 @@ class TestClientMockConnect(unittest.TestCase):
         self.assertTrue(frames_counted>10)
         
         #print("Recieved:",frames_counted)
-    def tearDown(self):
-
-        self.SCRCPY.kill_ffmpeg()
-        del self.SCRCPY
+    
         
 if __name__ == '__main__':
+    logging.basicConfig(stream=sys.stdout, level=logging.DEBUG)
     unittest.main()
     
