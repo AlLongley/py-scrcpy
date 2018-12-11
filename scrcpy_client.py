@@ -19,6 +19,7 @@ import subprocess
 import io
 import time
 import numpy as np
+import logging
 
 from threading import Thread
 from queue import Queue, Empty
@@ -37,7 +38,9 @@ HEADER_SIZE  = 12
 SCRCPY_dir = 'C:\\Users\\Al\\Downloads\\scrcpy-win64-v1.5\\scrcpy-win64\\'
 FFMPEG_bin = 'ffmpeg'
 ADB_bin = os.path.join(SCRCPY_dir,"adb")
+#fd = open("savesocksession",'wb')
 
+logger = logging.getLogger(__name__)
 
 class SCRCPY_client():
     def __init__(self):
@@ -53,39 +56,39 @@ class SCRCPY_client():
 
 
     def stdout_thread(self):
-        print("START STDOUT THREAD")
+        logger.info("START STDOUT THREAD")
         while self.ACTIVE:
             rd = self.ffm.stdout.read(self.bytes_to_read)
             if rd:
                 self.bytes_rcvd += len(rd)
                 self.images_rcvd += 1
                 self.ffoutqueue.put(rd)
-        print("FINISH STDOUT THREAD")
-
+        logger.info("FINISH STDOUT THREAD")
 
     def stderr_thread(self):
-        print("START STDERR THREAD")
+        logger.info("START STDERR THREAD")
         while self.ACTIVE:
             rd = self.ffm.stderr.readline()
             if rd:
                 self.FFmpeg_info.append(rd.decode("utf-8"))
-        print("FINISH STDERR THREAD")
-
+        logger.info("FINISH STDERR THREAD")
 
     def stdin_thread(self):
-        print("START STDIN THREAD")
-
+        logger.info("START STDIN THREAD")
+        
         while self.ACTIVE:
             if SVR_sendFrameMeta:
                 header = self.sock.recv(HEADER_SIZE)
-                pts  =int.from_bytes(header[:8],
+                #fd.write(header)
+                pts = int.from_bytes(header[:8],
                     byteorder='big', signed=False)
                 frm_len = int.from_bytes(header[8:],
                     byteorder='big', signed=False)
-                #print(pts)
-                #print(frm_len)
+                
+                
                
                 data = self.sock.recv(frm_len)
+                #fd.write(data)
                 self.bytes_sent += len(data)
                 self.ffm.stdin.write(data)
             else:
@@ -93,9 +96,8 @@ class SCRCPY_client():
                 self.bytes_sent += len(data)
                 self.ffm.stdin.write(data)
 
-        print("FINISH STDIN THREAD")
-            
-            
+        logger.info("FINISH STDIN THREAD")
+
     def get_next_frame(self, most_recent=False):
         if self.ffoutqueue.empty():
             return None
@@ -114,27 +116,35 @@ class SCRCPY_client():
         # PIL.Image.fromarray(np.uint8(rgb_img*255))
 
     def connect(self):
-        print("Connecting")
+        logger.info("Connecting")
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.sock.connect((IP, PORT))
 
         DUMMYBYTE = self.sock.recv(1)
+        #fd.write(DUMMYBYTE)
         if not len(DUMMYBYTE):
-            print("Failed to connect!")
-            exit()
+            raise ConnectionError("Did not recieve Dummy Byte!")
         else:
-            print("Connected!")
+            logger.info("Connected!")
 
         # Receive device specs
-        self.deviceName = self.sock.recv(64).decode("utf-8")
-        print("Device Name:", self.deviceName)
-
+        devname = self.sock.recv(64)
+        #fd.write(devname)
+        self.deviceName = devname.decode("utf-8")
+        
+        if not len(self.deviceName):
+            raise ConnectionError("Did not recieve Device Name!")
+        logger.info("Device Name: "+self.deviceName)
+        
         res = self.sock.recv(4)
+        #fd.write(res)
         self.WIDTH, self.HEIGHT = struct.unpack(">HH", res)
-        print("WxH:", self.WIDTH, "x", self.HEIGHT)
+        logger.info("WxH: "+str(self.WIDTH)+"x"+str(self.HEIGHT))
 
         self.bytes_to_read = self.WIDTH * self.HEIGHT * 3
-
+        
+        return True
+        
     def start_processing(self, connect_attempts=200):
         # Set up FFmpeg 
         ffmpegCmd = [FFMPEG_bin, '-y',
@@ -149,7 +159,7 @@ class SCRCPY_client():
                                         stdout=subprocess.PIPE,
                                         stderr=subprocess.PIPE)
         except FileNotFoundError:
-            raise Exception("Couldn't find FFmpeg at path FFMPEG_bin: "+
+            raise FileNotFoundError("Couldn't find FFmpeg at path FFMPEG_bin: "+
                             str(FFMPEG_bin))
         self.ffoutthrd = Thread(target=self.stdout_thread,
                                 args=())
@@ -167,29 +177,43 @@ class SCRCPY_client():
         time.sleep(0.25)
         self.ffoutthrd.start()
 
-        print("Waiting on FFmpeg to detect source", end='', flush=True)
+        logger.info("Waiting on FFmpeg to detect source")
         for i in range(connect_attempts):
-            print('.', end='', flush=True)
             if any(["Output #0, image2pipe" in x for x in self.FFmpeg_info]):
-                print("Ready!")
+                logger.info("Ready!")
                 self.FFMPEGREADY = True
                 break
-            time.sleep(0.5)
+            time.sleep(1)
+            logger.info('still waiting on FFmpeg...')
         else:
-            print("FFmpeg error?")
-            print(''.join(self.FFmpeg_info))
+            logger.error("FFmpeg error?")
+            logger.error(''.join(self.FFmpeg_info))
             raise Exception("FFmpeg could not open stream")
-
-
-if __name__ == "__main__":
+        return True
+        
+    def __del__(self):
+        self.ACTIVE = False
+        self.ffm.kill()
+        
+        #self.fferrthrd.join()
+        #self.ffinthrd.join()
+        #self.ffoutthrd.join()
+        
+def connect_and_forward_scrcpy():
     try:
-        print("Upload JAR")
-        subprocess.Popen(
+        logger.info("Upload JAR...")
+        adb_push = subprocess.Popen(
             [ADB_bin,'push',
             os.path.join(SCRCPY_dir,'scrcpy-server.jar'),
             '/data/local/tmp/'],
-            cwd=SCRCPY_dir).wait()
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            cwd=SCRCPY_dir)
+        adb_push_comm = ''.join([x.decode("utf-8") for x in adb_push.communicate() if x is not None])
         
+        if "error" in adb_push_comm:
+            logger.critical("Is your device/emulator visible to ADB?")
+            raise Exception(adb_push_comm)
         '''
         ADB Shell is Blocking, don't wait up for it 
         Args for the server are as follows:
@@ -200,7 +224,7 @@ if __name__ == "__main__":
         sendFrameMeta   (optional, bool) 
         
         '''
-        print("Run JAR")
+        logger.info("Run JAR")
         subprocess.Popen(
             [ADB_bin,'shell',
             'CLASSPATH=/data/local/tmp/scrcpy-server.jar',
@@ -210,19 +234,27 @@ if __name__ == "__main__":
             cwd=SCRCPY_dir)
         time.sleep(1)
         
-        print("Forward Port")
+        logger.info("Forward Port")
         subprocess.Popen(
             [ADB_bin,'forward',
             'tcp:8080','localabstract:scrcpy'],
             cwd=SCRCPY_dir).wait()
         time.sleep(1)
     except FileNotFoundError:
-        raise Exception("Couldn't find ADB at path ADB_bin: "+str(ADB_bin))
+        raise FileNotFoundError("Couldn't find ADB at path ADB_bin: "+
+                    str(ADB_bin))
+    return True
+    
+    
+if __name__ == "__main__":
+    logging.basicConfig(stream=sys.stdout, level=logging.INFO)
+    
+    assert connect_and_forward_scrcpy()
         
     SCRCPY = SCRCPY_client()
     SCRCPY.connect()
     SCRCPY.start_processing()
-
+    
     import cv2
     try:
         while True:
@@ -234,3 +266,6 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         from IPython import embed
         embed()
+    finally:
+        pass
+        #fd.close()
