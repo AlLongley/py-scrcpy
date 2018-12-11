@@ -64,10 +64,11 @@ class TestClientMockConnect(unittest.TestCase):
         self.assertTrue(self.SCRCPY.HEIGHT>1)
     def test_ffmpeg_running(self):
         self.assertIs(self.SCRCPY.ffm.poll(), None)
-
+    '''
     def test_ffmpeg_detected_stream(self):
         ffinfo = ''.join(self.SCRCPY.FFmpeg_info)
         self.assertTrue("Stream #0:0 -> #0:0 (h264 -> rawvideo)" in ffinfo)
+    '''
     
     def test_frames_recieved(self):
         
