@@ -1,0 +1,18 @@
+language: python
+python:
+  - "2.7"
+  - "3.4"
+  - "3.5"
+  - "3.6"
+
+  
+before_install:
+  - if [[ "$TRAVIS_OS_NAME" == "linux" ]]; then wget https://launchpad.net/~mc3man/+archive/ubuntu/trusty-media/+files/ffmpeg_3.3.3~trusty2_amd64.deb ; fi
+  - if [[ "$TRAVIS_OS_NAME" == "linux" ]]; then sudo dpkg -i ffmpeg_3.3.3~trusty2_amd64.deb ; fi
+  
+# command to install dependencies
+install:
+  - pip install numpy pillow nose pytest
+
+# command to run tests
+script: python -m pytest
