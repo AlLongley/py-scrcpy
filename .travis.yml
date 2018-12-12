@@ -1,6 +1,5 @@
 language: python
 python:
-  - "2.7"
   - "3.4"
   - "3.5"
   - "3.6"
@@ -16,4 +15,4 @@ install:
   - pip install numpy pillow nose pytest
 
 # command to run tests
-script: python -m pytest
+script: python /home/travis/build/Allong12/py-scrcpy/scrcpy_client_tests.py
